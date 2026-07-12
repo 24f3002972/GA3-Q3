@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dateutil import parser
+from datetime import datetime
 import re
 
 app = FastAPI()
@@ -20,13 +21,19 @@ class ExtractRequest(BaseModel):
 def parse_money(value):
     if not value:
         return None
-    value = value.replace("Rs.", "").replace("Rs", "").replace("₹", "").replace(",", "").strip()
+    value = (
+        value.replace("Rs.", "")
+        .replace("Rs", "")
+        .replace("₹", "")
+        .replace("$", "")
+        .replace("€", "")
+        .replace(",", "")
+        .strip()
+    )
     try:
         return float(value)
     except:
         return None
-
-from datetime import datetime
 
 def parse_date(value):
     if not value:
@@ -53,6 +60,8 @@ def parse_date(value):
     try:
         if re.match(r'^\d{1,2}[-/\.]\d{1,2}[-/\.]\d{4}$', value):
             return parser.parse(value, dayfirst=True).date().isoformat()
+        if re.match(r'^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}$', value):
+            return parser.parse(value, yearfirst=True).date().isoformat()
         return parser.parse(value, dayfirst=True).date().isoformat()
     except:
         return None
@@ -60,7 +69,7 @@ def parse_date(value):
 def extract_invoice_no(text):
     patterns = [
         r'(?im)^\s*(?:Invoice\s*No\.?|Invoice\s*Number|Invoice\s*#|Inv\s*No\.?|Receipt\s*No\.?|Ref(?:erence)?\s*No\.?|Ref)\s*[:#-]?\s*([A-Z0-9][A-Z0-9\/-]*)\s*$',
-        r'(?i)\b(?:Invoice\s*No\.?|Invoice\s*Number|Invoice\s*#|Inv\s*No\.?|Receipt\s*No\.?|Ref(?:erence)?\s*No\.?|Ref)\b[^\n]{0,25}?([A-Z]{1,5}-\d{2,10}[A-Z0-9\/-]*)',
+        r'(?i)\b(?:Invoice\s*No\.?|Invoice\s*Number|Invoice\s*#|Inv\s*No\.?|Receipt\s*No\.?|Ref(?:erence)?\s*No\.?|Ref)\b[^\n]{0,25}?([A-Z0-9][A-Z0-9\/-]*)',
         r'(?i)\b([A-Z]{1,5}-\d{2,10}[A-Z0-9\/-]*)\b'
     ]
     for pattern in patterns:
@@ -75,7 +84,7 @@ def extract_vendor(text):
     ]
 
     ignore = [
-        "invoice", "tax invoice", "bill to", "ship to", "subtotal", "total",
+        "invoice", "tax invoice", "bill to", "ship to", "subtotal", "sub total", "total",
         "gst", "igst", "cgst", "sgst", "date", "invoice no", "invoice number",
         "amount", "currency", "description", "qty", "quantity"
     ]
@@ -97,6 +106,40 @@ def extract_vendor(text):
 
     return None
 
+def extract_amount(text):
+    patterns = [
+        r'(?i)Subtotal\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+        r'(?i)Sub\s*Total\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+        r'(?i)Amount\s*Before\s*Tax\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+        r'(?i)Net\s*Amount\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+        r'(?i)Taxable\s*Amount\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return parse_money(m.group(1))
+    return None
+
+def extract_tax(text):
+    tax_matches = re.findall(
+        r'(?i)(?:GST|IGST|CGST|SGST|VAT|Tax)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+        text
+    )
+    if tax_matches:
+        values = [parse_money(x) for x in tax_matches if parse_money(x) is not None]
+        if values:
+            return round(sum(values), 2)
+    return None
+
+def extract_currency(text):
+    if re.search(r'(?i)\bINR\b|₹|Rs\.?', text):
+        return "INR"
+    if re.search(r'(?i)\bUSD\b|\$', text):
+        return "USD"
+    if re.search(r'(?i)\bEUR\b|€', text):
+        return "EUR"
+    return None
+
 @app.post("/extract")
 def extract_invoice(data: ExtractRequest):
     text = data.invoice_text
@@ -111,40 +154,10 @@ def extract_invoice(data: ExtractRequest):
             if date:
                 break
 
-    vendor = None
-    for label in [r"Vendor", r"Supplier", r"From"]:
-        m = re.search(rf"(?i){label}\s*[:\-]?\s*([^\n]+)", text)
-        if m:
-            vendor = m.group(1).strip()
-            break
-
-    amount = None
-    for pattern in [
-        r'(?i)Subtotal\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d,]+\.\d{2})',
-        r'(?i)Amount\s*Before\s*Tax\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d,]+\.\d{2})',
-        r'(?i)Net\s*Amount\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d,]+\.\d{2})'
-    ]:
-        m = re.search(pattern, text)
-        if m:
-            amount = parse_money(m.group(1))
-            break
-
-    tax = None
-    for pattern in [
-        r'(?i)(?:GST|IGST|CGST|SGST|VAT|Tax)[^\n:]*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d,]+\.\d{2})'
-    ]:
-        m = re.search(pattern, text)
-        if m:
-            tax = parse_money(m.group(1))
-            break
-
-    currency = None
-    if re.search(r'(?i)\bINR\b|Rs\.?|₹', text):
-        currency = "INR"
-    elif re.search(r'(?i)\bUSD\b|\$', text):
-        currency = "USD"
-    elif re.search(r'(?i)\bEUR\b|€', text):
-        currency = "EUR"
+    vendor = extract_vendor(text)
+    amount = extract_amount(text)
+    tax = extract_tax(text)
+    currency = extract_currency(text)
 
     return {
         "invoice_no": invoice_no,
