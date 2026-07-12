@@ -121,14 +121,38 @@ def extract_amount(text):
     return None
 
 def extract_tax(text):
-    tax_matches = re.findall(
-        r'(?i)(?:GST|IGST|CGST|SGST|VAT|Tax)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
+    total_tax_patterns = [
+        r'(?im)^(?:GST|Total GST|Tax|Total Tax|VAT)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$'
+    ]
+
+    for pattern in total_tax_patterns:
+        m = re.search(pattern, text)
+        if m:
+            return parse_money(m.group(1))
+
+    m = re.search(
+        r'(?im)^(?:IGST|Integrated GST)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
         text
     )
-    if tax_matches:
-        values = [parse_money(x) for x in tax_matches if parse_money(x) is not None]
-        if values:
-            return round(sum(values), 2)
+    if m:
+        return parse_money(m.group(1))
+
+    component_patterns = [
+        r'(?im)^(?:CGST|Central GST)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^(?:SGST|State GST)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$'
+    ]
+
+    values = []
+    for pattern in component_patterns:
+        matches = re.findall(pattern, text)
+        for x in matches:
+            val = parse_money(x)
+            if val is not None:
+                values.append(val)
+
+    if values:
+        return round(sum(values), 2)
+
     return None
 
 def extract_currency(text):
