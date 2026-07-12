@@ -18,6 +18,14 @@ app.add_middleware(
 class ExtractRequest(BaseModel):
     invoice_text: str
 
+class ExtractResponse(BaseModel):
+    invoice_no: str | None
+    date: str | None
+    vendor: str | None
+    amount: float | None
+    tax: float | None
+    currency: str | None
+
 def parse_money(value):
     if not value:
         return None
@@ -106,20 +114,6 @@ def extract_vendor(text):
 
     return None
 
-def extract_amount(text):
-    patterns = [
-        r'(?i)Subtotal\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
-        r'(?i)Sub\s*Total\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
-        r'(?i)Amount\s*Before\s*Tax\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
-        r'(?i)Net\s*Amount\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
-        r'(?i)Taxable\s*Amount\s*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            return parse_money(m.group(1))
-    return None
-
 def extract_tax(text):
     total_tax_patterns = [
         r'(?im)^(?:GST|Total GST|Tax|Total Tax|VAT)[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$'
@@ -155,6 +149,44 @@ def extract_tax(text):
 
     return None
 
+def extract_amount(text, tax=None):
+    patterns = [
+        r'(?im)^Subtotal[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Sub\s*Total[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Amount\s*Before\s*Tax[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Net\s*Amount[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Taxable\s*Amount[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Base\s*Amount[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Assessable\s*Value[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Value\s*of\s*Supply[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Total\s*Before\s*Tax[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Net[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$'
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return parse_money(m.group(1))
+
+    total_patterns = [
+        r'(?im)^Total\s*Due[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Grand\s*Total[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$',
+        r'(?im)^Total[^\n:]*[:\-]?\s*(?:Rs\.?|₹|\$|€)?\s*([\d,]+\.\d{2})\s*$'
+    ]
+
+    total_value = None
+    for pattern in total_patterns:
+        m = re.search(pattern, text)
+        if m:
+            total_value = parse_money(m.group(1))
+            if total_value is not None:
+                break
+
+    if total_value is not None and tax is not None:
+        return round(total_value - tax, 2)
+
+    return None
+
 def extract_currency(text):
     if re.search(r'(?i)\bINR\b|₹|Rs\.?', text):
         return "INR"
@@ -164,7 +196,7 @@ def extract_currency(text):
         return "EUR"
     return None
 
-@app.post("/extract")
+@app.post("/extract", response_model=ExtractResponse)
 def extract_invoice(data: ExtractRequest):
     text = data.invoice_text
 
@@ -179,8 +211,8 @@ def extract_invoice(data: ExtractRequest):
                 break
 
     vendor = extract_vendor(text)
-    amount = extract_amount(text)
     tax = extract_tax(text)
+    amount = extract_amount(text, tax)
     currency = extract_currency(text)
 
     return {
