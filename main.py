@@ -26,10 +26,33 @@ def parse_money(value):
     except:
         return None
 
+from datetime import datetime
+
 def parse_date(value):
     if not value:
         return None
+
+    value = value.strip()
+
+    known_formats = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d.%m.%Y",
+        "%d %B %Y",
+        "%d %b %Y",
+    ]
+
+    for fmt in known_formats:
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except:
+            pass
+
     try:
+        if re.match(r'^\d{1,2}[-/\.]\d{1,2}[-/\.]\d{4}$', value):
+            return parser.parse(value, dayfirst=True).date().isoformat()
         return parser.parse(value, dayfirst=True).date().isoformat()
     except:
         return None
