@@ -69,6 +69,34 @@ def extract_invoice_no(text):
             return m.group(1).strip(" .:#")
     return None
 
+def extract_vendor(text):
+    patterns = [
+        r'(?im)^\s*(?:Vendor|Supplier|From|Bill From|Sold By|Issued By|Provider|Company|Seller)\s*[:\-]?\s*(.+?)\s*$'
+    ]
+
+    ignore = [
+        "invoice", "tax invoice", "bill to", "ship to", "subtotal", "total",
+        "gst", "igst", "cgst", "sgst", "date", "invoice no", "invoice number",
+        "amount", "currency", "description", "qty", "quantity"
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            candidate = m.group(1).strip(" .:-")
+            if candidate and candidate.lower() not in ignore:
+                return candidate
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines[:8]:
+        low = line.lower()
+        if any(word in low for word in ignore):
+            continue
+        if re.search(r'^[A-Za-z][A-Za-z0-9&.,()\/ -]{2,}$', line):
+            return line.strip(" .:-")
+
+    return None
+
 @app.post("/extract")
 def extract_invoice(data: ExtractRequest):
     text = data.invoice_text
